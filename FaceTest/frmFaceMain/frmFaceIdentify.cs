@@ -20,36 +20,30 @@ using System.Threading;
 
 namespace frmFaceMain
 {
+    /// <summary>
+    /// 返回人脸识别结果
+    /// </summary>
+    /// <param name="sender">识别form</param>
+    /// <param name="accountId">账号id</param>
+    public delegate void FaceDetectResultEventHandler(object sender, string accountId);
+
     public partial class frmFaceIdentify : Form
     {
-       
+        public event FaceDetectResultEventHandler FaceDetectCallback;
+
         FilterInfoCollection videoDevices;
         VideoCaptureDevice videoSource;
         public int selectedDeviceIndex = 0;
-        private bool isDetecting = true;
-        private int tryToDetectCount = 0; // 每检测5次尝试提示一次
-        private string[] parseResult;
-        System.Timers.Timer timer;
-
-
-        /// <summary>
-        /// 关闭form时清理摄像头
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void handleFormClosingEvent(object sender, FormClosingEventArgs e)
-        {
-            timer.Stop();
-            stopDetecting();
-        }
+        bool isDetecting = true;
 
         public frmFaceIdentify()
         {
             InitializeComponent();
             btnIdentify.Click += BtnIdentify_Click;
-            CheckForIllegalCrossThreadCalls = true;
             FormClosing += handleFormClosingEvent;
+            CheckForIllegalCrossThreadCalls = true;
         }
+
 
         /// <summary>
         /// 窗体加载连接摄像头
@@ -59,46 +53,39 @@ namespace frmFaceMain
         private void frmFaceIdentify_Load(object sender, EventArgs e)
         {
             videoDevices = new FilterInfoCollection(FilterCategory.VideoInputDevice);
-            if (videoDevices.Count > 0)
+            selectedDeviceIndex = 0;
+            videoSource = new VideoCaptureDevice(videoDevices[selectedDeviceIndex].MonikerString);//连接摄像头
+            videoSource.VideoResolution = videoSource.VideoCapabilities[selectedDeviceIndex];
+            videoSource.NewFrame += handleCameraFrameChanged;
+            vspIdentify.VideoSource = videoSource;
+            vspIdentify.Start();
+
+            System.Timers.Timer timer = new System.Timers.Timer();
+            timer.Enabled = true;
+            timer.Interval = 3000; //执行间隔时间,单位为毫秒;
+            timer.Start();
+            timer.AutoReset = false;
+            timer.Elapsed += delegate
             {
-                selectedDeviceIndex = 0;
-                videoSource = new VideoCaptureDevice(videoDevices[selectedDeviceIndex].MonikerString);//连接摄像头
-                videoSource.NewFrame += handleCameraFrameChanged;
-                videoSource.VideoResolution = videoSource.VideoCapabilities[selectedDeviceIndex];
-                vspIdentify.VideoSource = videoSource;
-                vspIdentify.Start();
+                isDetecting = false;
+            };
+        }
 
-                timer = new System.Timers.Timer();
-                timer.Enabled = true;
-                timer.Interval = 3000; //执行间隔时间,单位为毫秒;
-                timer.Start();
-                timer.Elapsed += delegate
-                {
-                    if (isDetecting && tryToDetectCount == 0)
-                    {
-                        isDetecting = false;
-                    }
-
-                    if (parseResult != null)
-                    {
-                        timer.Stop();
-                        // 从timer线程切换到主线程刷新UI
-                        this.BeginInvoke(new MethodInvoker(delegate
-                        {
-                            stopDetecting();
-                        }));
-                    }
-
-                    tryToDetectCount++;
-                    if (tryToDetectCount != 0 && tryToDetectCount % 5 == 0)
-                    {
-                        MessageBox.Show("请正对摄像头");
-                    }
-                };
-            }
-            else
+        /// <summary>
+        /// 关闭form时清理摄像头
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void handleFormClosingEvent(object sender, FormClosingEventArgs e)
+        {
+            if (videoSource.IsRunning)
             {
-                MessageBox.Show("没有找到可用的摄像头");
+                videoSource.SignalToStop();
+                videoSource.WaitForStop();
+
+                // 释放摄像头
+                vspIdentify.SignalToStop();
+                vspIdentify.WaitForStop();
             }
         }
 
@@ -114,22 +101,11 @@ namespace frmFaceMain
         }
 
         /// <summary>
-        /// 人脸识别按钮
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void BtnIdentify_Click(object sender, EventArgs e)
-        {
-            if (isDetecting) return;
-            isDetecting = false;
-        }
-
-        /// <summary>
         /// 在收到相机通知可以读取图像时进行图像处理
         /// </summary>
         private void handleImageDetecting()
         {
-            Bitmap  bitmap = vspIdentify.GetCurrentVideoFrame();//识别
+            Bitmap bitmap = vspIdentify.GetCurrentVideoFrame();//识别
             if (bitmap == null) return;
 
             // 控制一次只能处理一张图片
@@ -138,19 +114,20 @@ namespace frmFaceMain
             // 图像识别耗时且走网络，应该考虑放到子线程执行
             new Thread(new ParameterizedThreadStart(t =>
             {
-                string fileName = DateTime.Now.ToString("yyy-MM-dd-HH-mm-ss-ff") + ".jpg";
-                bitmap.Save(@"..\faceImage\face" + fileName, ImageFormat.Jpeg);
+                string[] result = FaceSearch.search(bitmap);
                 bitmap.Dispose();
-                string[] result = FaceSearch.search(fileName);
-                //图片路径
-                string path = "../faceImage/face" + fileName;
-                //删除本地文件
-                File.Delete(path);
-
                 double score = Convert.ToDouble(result[2]);
                 if (score > 80)
                 {
-                    parseResult = result;
+                    // 从timer线程切换到主线程刷新UI
+                    this.BeginInvoke(new MethodInvoker(delegate
+                    {
+                        this.Close();
+                        if (FaceDetectCallback != null)
+                        {
+                            FaceDetectCallback(this, result[1]);
+                        }
+                    }));
                 }
                 else
                 {
@@ -160,111 +137,61 @@ namespace frmFaceMain
         }
 
         /// <summary>
-        /// zhu
+        /// 人脸识别按钮
         /// </summary>
-        /// <param name="map"></param>
-        /// <returns></returns>
-        private byte[] convertBitmapToBytes(Bitmap map)
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void BtnIdentify_Click(object sender, EventArgs e)
         {
-            MemoryStream ms = new MemoryStream();
-            map.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
-            byte[] bytes = ms.GetBuffer();  //byte[]   bytes=   ms.ToArray(); 这两句都可以，至于区别么，下面有解释
-            ms.Close();
-            return bytes;
-        }
-
-        private void stopDetecting()
-        {
-            if (videoSource.IsRunning)
-            {
-                if (parseResult != null)
-                {
-                    txtGroup.Text = parseResult[0];
-                    txtUid.Text = parseResult[1];
-                    txtMatchingScore.Text = parseResult[2];
-                    MessageBox.Show("人脸识别成功");
-
-                }
-
-                videoSource.SignalToStop();
-                videoSource.WaitForStop();
-
-                // 释放摄像头
-                vspIdentify.SignalToStop();
-                vspIdentify.WaitForStop();
+            if (videoSource == null) {
+                return;
             }
-        }
-        #region UI控件
-        private void vspIdentify_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void txtUid_TextChanged(object sender, EventArgs e)
-        {
-
+                
+            Bitmap bitmap = vspIdentify.GetCurrentVideoFrame();
+            string[] result = FaceSearch.search(bitmap);
+            bitmap.Dispose();
+            txtGroup.Text = result[0];
+            txtUid.Text = result[1];
+            txtMatchingScore.Text = result[2];
         }
 
-        private void labUid_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void txtMatchingScore_TextChanged(object sender, EventArgs e)
-        {
-
-        }
-
-        private void labMatchingScore_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void txtGroup_TextChanged(object sender, EventArgs e)
-        {
-
-        }
-
-        private void labGroup_Click(object sender, EventArgs e)
-        {
-
-        }
-        #endregion
     }
-        public static class AccessToken
+
+    public static class AccessToken
+    {
+        // 调用getAccessToken()获取的 access_token建议根据expires_in 时间 设置缓存
+        // 返回token
+        public static String TOKEN = "24.adda70c11b9786206253ddb70affdc46.2592000.1493524354.282335-1234567";
+
+        // API Key 
+        private static String clientId = "HtSzIhdj2UqfEu1XewhGWPXL";
+        // Secret Key
+        private static String clientSecret = "4pNesBWNYBkWzmzzQG13BTFni40TTe3W";
+
+        public static String getAccessToken()
         {
-            // 调用getAccessToken()获取的 access_token建议根据expires_in 时间 设置缓存
-            // 返回token
-            public static String TOKEN = "24.adda70c11b9786206253ddb70affdc46.2592000.1493524354.282335-1234567";
-
-            // API Key 
-            private static String clientId = "HtSzIhdj2UqfEu1XewhGWPXL";
-            // Secret Key
-            private static String clientSecret = "4pNesBWNYBkWzmzzQG13BTFni40TTe3W";
-
-            public static String getAccessToken()
+            String authHost = "https://aip.baidubce.com/oauth/2.0/token";
+            HttpClient client = new HttpClient();
+            List<KeyValuePair<String, String>> paraList = new List<KeyValuePair<string, string>>();
+            paraList.Add(new KeyValuePair<string, string>("grant_type", "client_credentials"));
+            paraList.Add(new KeyValuePair<string, string>("client_id", clientId));
+            paraList.Add(new KeyValuePair<string, string>("client_secret", clientSecret));
+            String result = "";
+            try
             {
-                String authHost = "https://aip.baidubce.com/oauth/2.0/token";
-                HttpClient client = new HttpClient();
-                List<KeyValuePair<String, String>> paraList = new List<KeyValuePair<string, string>>();
-                paraList.Add(new KeyValuePair<string, string>("grant_type", "client_credentials"));
-                paraList.Add(new KeyValuePair<string, string>("client_id", clientId));
-                paraList.Add(new KeyValuePair<string, string>("client_secret", clientSecret));
-                String result = "";
-                try
-                {
-                    HttpResponseMessage response = client.PostAsync(authHost, new FormUrlEncodedContent(paraList)).Result;
-                    Console.WriteLine(result);
-                    return result;
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("网络连接失败！请检查你的网络！");
-                    Console.Write("异常：{0}", ex.Message);
-                }
+                HttpResponseMessage response = client.PostAsync(authHost, new FormUrlEncodedContent(paraList)).Result;
+                result = response.Content.ReadAsStringAsync().Result;
+                Console.WriteLine(result);
                 return result;
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show("网络连接失败！请检查你的网络！");
+                Console.Write("异常：{0}", ex.Message);
+            }
+            return result;
         }
+    }
 
     public class FaceSearch
     {
@@ -273,7 +200,7 @@ namespace frmFaceMain
         /// </summary>
         /// <param name="ch"></param>
         /// <returns></returns>
-        public static string[] search(string ch)
+        public static string[] search(Bitmap image)
         {
             string[] strArr = new string[3];
             //网络连接失败为获取到AccessToken
@@ -289,15 +216,16 @@ namespace frmFaceMain
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(host);
             request.Method = "post";
             request.KeepAlive = true;
-            var value = File.ReadAllBytes("../faceImage/face" + ch);
+            var value = Components.convertBitmapToBytes(image);
             string imgData64 = Convert.ToBase64String(value);
             String str = "{\"image\":\"" + imgData64 + "\",\"image_type\":\"BASE64\",\"group_id_list\":\"fylm\"}";
-            byte[] buffer = encoding.GetBytes(str); 
+            byte[] buffer = encoding.GetBytes(str);
             request.ContentLength = buffer.Length;
             request.GetRequestStream().Write(buffer, 0, buffer.Length);
             HttpWebResponse response = (HttpWebResponse)request.GetResponse();
             StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.Default);
             string result = reader.ReadToEnd();
+            Console.WriteLine("人脸搜索:");
             JObject jo = (JObject)JsonConvert.DeserializeObject(result);
             string val = "";
             try
@@ -310,7 +238,6 @@ namespace frmFaceMain
             }
             JArray ja = (JArray)JsonConvert.DeserializeObject(val);
             Double Score = Convert.ToDouble(ja[0]["score"].ToString());//匹配度
-            
             string Uid = ja[0]["user_id"].ToString();//用户名
             string GroupId = ja[0]["group_id"].ToString();//组名
             strArr[0] = GroupId.ToString();
@@ -319,4 +246,5 @@ namespace frmFaceMain
             return strArr;
         }
     }
+
 }

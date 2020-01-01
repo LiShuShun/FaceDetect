@@ -44,42 +44,45 @@
             this.mnsExit});
             this.mns.Location = new System.Drawing.Point(0, 0);
             this.mns.Name = "mns";
-            this.mns.Size = new System.Drawing.Size(900, 28);
+            this.mns.Padding = new System.Windows.Forms.Padding(4, 2, 0, 2);
+            this.mns.Size = new System.Drawing.Size(675, 25);
             this.mns.TabIndex = 1;
             this.mns.Text = "menuStrip1";
             // 
             // mnsIdentify
             // 
             this.mnsIdentify.Name = "mnsIdentify";
-            this.mnsIdentify.Size = new System.Drawing.Size(81, 24);
+            this.mnsIdentify.Size = new System.Drawing.Size(68, 21);
             this.mnsIdentify.Text = "人脸识别";
             this.mnsIdentify.Click += new System.EventHandler(this.mnsIdentify_Click);
             // 
             // mnsInput
             // 
             this.mnsInput.Name = "mnsInput";
-            this.mnsInput.Size = new System.Drawing.Size(81, 24);
+            this.mnsInput.Size = new System.Drawing.Size(68, 21);
             this.mnsInput.Text = "人脸录入";
             this.mnsInput.Click += new System.EventHandler(this.mnsInput_Click);
             // 
             // mnsExit
             // 
             this.mnsExit.Name = "mnsExit";
-            this.mnsExit.Size = new System.Drawing.Size(51, 24);
+            this.mnsExit.Size = new System.Drawing.Size(44, 21);
             this.mnsExit.Text = "退出";
             this.mnsExit.Click += new System.EventHandler(this.mnsExit_Click);
             // 
             // frmMain
             // 
-            this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 15F);
+            this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 12F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(900, 521);
+            this.ClientSize = new System.Drawing.Size(675, 417);
             this.Controls.Add(this.mns);
             this.IsMdiContainer = true;
             this.MainMenuStrip = this.mns;
+            this.Margin = new System.Windows.Forms.Padding(2, 2, 2, 2);
             this.Name = "frmMain";
             this.Text = "人脸识别及录入";
             this.WindowState = System.Windows.Forms.FormWindowState.Maximized;
+            this.Load += new System.EventHandler(this.frmMain_Load);
             this.mns.ResumeLayout(false);
             this.mns.PerformLayout();
             this.ResumeLayout(false);

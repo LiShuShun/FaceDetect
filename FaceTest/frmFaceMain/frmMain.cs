@@ -26,7 +26,15 @@ namespace frmFaceMain
             frmFaceIdentify fi = new frmFaceIdentify();
             fi.MdiParent = this;
             fi.Show();
+
+            fi.FaceDetectCallback += faceDetectCallback;
         }
+
+        private void faceDetectCallback(object sender, string result)
+        {
+            MessageBox.Show((result == "" ? "人脸检测失败" : "人脸检测成功:") +result);
+        }
+
         /// <summary>
         /// 人脸录入
         /// </summary>
@@ -47,6 +55,11 @@ namespace frmFaceMain
         {
             //Application.Exit();
             System.Environment.Exit(0);//彻底退出包括线程
+        }
+
+        private void frmMain_Load(object sender, EventArgs e)
+        {
+
         }
     }
 }

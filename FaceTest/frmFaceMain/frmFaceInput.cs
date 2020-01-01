@@ -16,6 +16,7 @@ using Newtonsoft.Json;
 using AForge.Video.DirectShow;
 using System.Drawing.Imaging;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace frmFaceMain
 {
@@ -23,23 +24,12 @@ namespace frmFaceMain
     {
         FilterInfoCollection videoDevices;
         VideoCaptureDevice videoSource;
-
         public int selectedDeviceIndex = 0;
+        bool isDetecting = false;
 
         public frmFaceInput()
         {
             InitializeComponent();
-            FormClosing += handleFormClosingEvent;
-        }
-
-        /// <summary>
-        /// 关闭form时清理摄像头
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void handleFormClosingEvent(object sender, FormClosingEventArgs e)
-        {
-            stopDetecting();
         }
 
         /// <summary>
@@ -55,20 +45,45 @@ namespace frmFaceMain
             videoSource.VideoResolution = videoSource.VideoCapabilities[selectedDeviceIndex];
             vspInput.VideoSource = videoSource;
             vspInput.Start();
+
+            FormClosing += handleFormClosingEvent;
+        }
+        /// <summary>
+        /// 关闭form时清理摄像头
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void handleFormClosingEvent(object sender, FormClosingEventArgs e)
+        {
+            if (videoSource.IsRunning)
+            {
+                videoSource.SignalToStop();
+                videoSource.WaitForStop();
+
+                // 释放摄像头
+                vspInput.SignalToStop();
+                vspInput.WaitForStop();
+            }
         }
         /// <summary>
         /// 录入按钮
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
-        private void BtnInput_Click(object sender, EventArgs e)
+        private void btnInput_Click(object sender, EventArgs e)
         {
-            if (txtUid.Text == "")
+            if (isDetecting)
+            {
+                return;
+            }
+
+            string name = txtUid.Text;
+            if (name == "")
             {
                 MessageBox.Show("请输入用户名！");
                 return;
             }
-            if (Check.IsChinese(txtUid.Text))
+            if (Check.IsChinese(name))
             {
                 MessageBox.Show("请输入数字/字母/下划线");
                 return;
@@ -78,46 +93,40 @@ namespace frmFaceMain
                 MessageBox.Show("请先连接摄像头 ！");
                 return;
             }
-            Bitmap bitmap = vspInput.GetCurrentVideoFrame();//录入
-            string fileName = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss-ff") + ".jpg";
-            string name = txtUid.Text;
-            bitmap.Save(@"..\faceImage\face" + fileName, ImageFormat.Jpeg); //保存于本地bin/faceImage文件夹
-            bitmap.Dispose();
-            if (FaceAdd.add(fileName, name) > 0)
+            Bitmap bitmap = vspInput.GetCurrentVideoFrame();
+            if (bitmap == null)
             {
-                MessageBox.Show("录入失败！");
                 return;
             }
-            MessageBox.Show("录入成功！");
-            //图片路径
-            string path = "../faceImage/face" + fileName;
-            //删除本地文件
-            File.Delete(path);
 
-            vspInput.Stop();
-        }
-//
-        private void stopDetecting()
-        {
-            if (videoSource.IsRunning)
+            isDetecting = true;
+            // 图像识别耗时且走网络，应该考虑放到子线程执行
+            new Thread(new ParameterizedThreadStart(t =>
             {
-                videoSource.SignalToStop();
-                videoSource.WaitForStop();
-                // 释放摄像头
-                vspInput.SignalToStop();
-                vspInput.WaitForStop();
-            }
-        }
-
-        private void vspInput_Click(object sender, EventArgs e)
-        {
+                int result = FaceAdd.add(bitmap, name);
+                bitmap.Dispose();
+                // 从timer线程切换到主线程刷新UI
+                this.BeginInvoke(new MethodInvoker(delegate
+                {
+                    MessageBox.Show((result > 0 ? "录入失败!" : "录入成功！") + result);
+                    if (result > 0)
+                    {
+                        isDetecting = false;
+                    }
+                    else
+                    {
+                        this.Close();
+                    }
+                }));
+            })).Start("tryToDetectFace");
+           
         }
     }
 
     public class FaceAdd
     {
         // 人脸注册
-        public static int add(string imgName, string name)
+        public static int add(Bitmap image, string name)
         {
             if (AccessToken.getAccessToken() == "")
             {
@@ -132,7 +141,7 @@ namespace frmFaceMain
             request.Method = "post";
 
             request.KeepAlive = true;
-            var value = File.ReadAllBytes("../faceImage/face" + imgName);
+            var value = Components.convertBitmapToBytes(image);
             string imgData64 = Convert.ToBase64String(value);
             String str = "{\"image\":\"" + imgData64 + "\",\"image_type\":\"BASE64\",\"group_id\":\"fylm\",\"user_id\":\"" + name + "\"}";
 
@@ -142,11 +151,10 @@ namespace frmFaceMain
             HttpWebResponse response = (HttpWebResponse)request.GetResponse();
             StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.Default);
             string result = reader.ReadToEnd();
-            MessageBox.Show("人脸注册:");
-            MessageBox.Show(result);
+            Console.WriteLine("人脸注册:");
+            Console.WriteLine(result);
             JObject jo = (JObject)JsonConvert.DeserializeObject(result);
             int error_code = Convert.ToInt32(jo["error_code"]);//返回error_code
-            MessageBox.Show(error_code + "");
             return error_code;
         }
     }
@@ -174,7 +182,7 @@ namespace frmFaceMain
                 }
             }
             return true;
+
         }
     }
 }
-
